@@ -73,6 +73,9 @@ def build_repositories(events_df, data_dir):
         .sort_values("repo_id")
         .reset_index(drop=True)
     )
+    repos["repo_id"] = pd.to_numeric(repos["repo_id"], errors="coerce")
+    repos.dropna(subset=["repo_id"], inplace=True)
+    repos["repo_id"] = repos["repo_id"].astype(int)
     print(f"  Found {len(repos):,} unique repositories in events")
 
     meta_path = os.path.join(data_dir, "repo_metadata.csv")
