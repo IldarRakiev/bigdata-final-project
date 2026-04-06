@@ -1,12 +1,14 @@
 #!/bin/bash
 set -e
 
-echo "============================================"
 echo "Stage 1: PostgreSQL + Sqoop"
-echo "============================================"
 
-# Activate virtual environment
+# Create and activate virtual environment
+if [ ! -d "venv" ]; then
+    python3 -m venv venv
+fi
 source venv/bin/activate
+pip install -r requirements.txt --quiet
 
 # ---- Configuration ----
 password=$(head -n 1 secrets/.psql.pass)
