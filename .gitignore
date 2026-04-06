@@ -172,3 +172,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Large data files
+data/*.csv
+data/*.json
+data/*.gz
+
+# Secrets (passwords, credentials)
+secrets/
