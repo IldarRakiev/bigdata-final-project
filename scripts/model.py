@@ -142,7 +142,7 @@ def build_feature_table(repos, events):
     features = features.withColumn(
         "first_seen_ts",
         F.to_timestamp(F.col("first_seen_at").cast("double") / 1000.0),
-    ).filter(F.col("first_seen_ts").isNotNull())
+    )
 
     features = features.withColumn(
         "repo_age_days",
@@ -175,10 +175,11 @@ def build_feature_table(repos, events):
         *[f"{ev}_cnt" for ev in EVENT_TYPES],
         "label",
     ]
-    # Drop rows only where numeric inputs are null (language already filled).
-    return features.select(*feature_cols).na.drop(
-        subset=["repo_age_days", "total_actors", "active_months", "label"]
-    )
+    # Replace remaining NULL numerics with 0 so no row is dropped.
+    return features.select(*feature_cols).na.fill(0, subset=[
+        "repo_age_days", "total_actors", "active_months",
+        *[f"{ev}_cnt" for ev in EVENT_TYPES],
+    ]).na.fill("Unknown", subset=["language"])
 
 
 def build_preprocessing_pipeline():
