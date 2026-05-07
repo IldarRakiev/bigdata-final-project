@@ -6,7 +6,7 @@ based on its language, age, first-seen time (cyclical encoded), and
 aggregated event-type counts.
 
 Pipeline:
-    1. Read Hive tables (repositories_buck, events_part).
+    1. Read repositories from Hive, events from raw AVRO on HDFS.
     2. Build a feature table (one row per repo).
     3. Feature engineering: cyclical sin/cos for month, one-hot for language.
     4. Train/test split (saved to HDFS as JSON).
@@ -26,10 +26,12 @@ from pyspark.ml.regression import GBTRegressor, LinearRegression
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql import types as T
 
 TEAM = "team28"
 WAREHOUSE = "project/hive/warehouse"
 DB_NAME = f"{TEAM}_projectdb"
+EVENTS_AVRO_PATH = "project/warehouse/events"
 
 EVENT_TYPES = [
     "PushEvent",
@@ -41,7 +43,7 @@ EVENT_TYPES = [
 ]
 
 # End of data window (June 30, 2024) — used to compute repo age.
-WINDOW_END = "2024-06-30"
+WINDOW_END = "Date6"
 
 
 def build_spark():
@@ -49,29 +51,58 @@ def build_spark():
     return (
         SparkSession.builder.appName(f"{TEAM} - Stage 3 - Spark ML")
         .master("yarn")
-        .config(
-            "hive.metastore.uris",
-            "thrift://hadoop-02.uni.innopolis.ru:9883",
-        )
         .config("spark.sql.warehouse.dir", WAREHOUSE)
-        .config("spark.sql.avro.compression.codec", "snappy")
+        .config("spark.sql.catalogImplementation", "hive")
+        .config("spark.jars.packages", "org.apache.spark:spark-avro_2.12:3.2.4")
         .enableHiveSupport()
         .getOrCreate()
     )
 
 
 def read_tables(spark):
-    """Read Hive tables as Spark DataFrames."""
+    """Read data sources.
+
+    - repositories_buck from Hive (works).
+    - events from raw AVRO on HDFS (Hive events_part is empty / broken).
+    """
     repos = spark.read.table(f"{DB_NAME}.repositories_buck")
-    events = spark.read.table(f"{DB_NAME}.events_part")
+
+    events = (
+        spark.read.format("avro")
+        .load(EVENTS_AVRO_PATH)
+        .select(
+            "event_type",
+            "repo_id",
+            "event_date",
+            "event_count",
+            "unique_actors",
+        )
+    )
     return repos, events
+
+
+def normalise_first_seen(col):
+    """Cast first_seen_at to timestamp.
+
+    Sqoop can export it either as STRING (ISO) or as BIGINT epoch millis,
+    depending on the source type. Handle both.
+    """
+    as_str = F.col(col).cast("string")
+    # If the value is purely digits and 12-14 chars long → epoch millis.
+    numeric_ts = F.when(
+        as_str.rlike("^[0-9]{12,14}$"),
+        (as_str.cast("double") / 1000.0).cast(T.TimestampType()),
+    )
+    # Otherwise try to parse as string timestamp.
+    string_ts = F.to_timestamp(as_str)
+    return F.coalesce(numeric_ts, string_ts)
 
 
 def build_feature_table(repos, events):
     """Aggregate events by repo and join with repositories metadata.
 
     Returns one row per repo with:
-      - language, first_seen_at (for feature engineering)
+      - language (categorical), first_seen_ts (for age + cyclic month)
       - per-event-type totals (PushEvent_cnt, ...)
       - total_actors, active_months
       - label = log(total_events + 1)
@@ -83,39 +114,38 @@ def build_feature_table(repos, events):
         .agg(F.sum("event_count"))
         .na.fill(0)
     )
-    # Rename columns to _cnt suffix.
     for ev in EVENT_TYPES:
         per_type = per_type.withColumnRenamed(ev, f"{ev}_cnt")
 
-    # Totals across all event types.
+    # Totals across all event types + active months proxy.
     totals = events.groupBy("repo_id").agg(
         F.sum("event_count").alias("total_events"),
         F.sum("unique_actors").alias("total_actors"),
-        F.countDistinct("event_year", "event_month").alias("active_months"),
+        F.countDistinct(F.substring(F.col("event_date").cast("string"), 1, 7))
+            .alias("active_months"),
     )
 
     features = totals.join(per_type, "repo_id", "inner").join(
         repos, "repo_id", "inner"
     )
 
-    # Keep only repos with a known language and first_seen_at.
+    # Keep only repos with known language and first_seen_at.
     features = features.filter(
         F.col("language").isNotNull() & F.col("first_seen_at").isNotNull()
     )
 
-    # Cast first_seen_at (STRING) to TIMESTAMP.
+    # Timestamp.
     features = features.withColumn(
-        "first_seen_ts",
-        F.to_timestamp("first_seen_at"),
+        "first_seen_ts", normalise_first_seen("first_seen_at")
     ).filter(F.col("first_seen_ts").isNotNull())
 
-    # Repo age in days (w.r.t. end of window).
+    # Repo age in days.
     features = features.withColumn(
         "repo_age_days",
         F.datediff(F.lit(WINDOW_END), F.col("first_seen_ts")),
     )
 
-    # Cyclical sin/cos encoding of first-seen month (1..12).
+    # Cyclical sin/cos encoding of month.
     features = features.withColumn(
         "first_seen_month", F.month("first_seen_ts")
     )
@@ -123,18 +153,16 @@ def build_feature_table(repos, events):
     features = features.withColumn(
         "first_seen_month_sin",
         F.sin(F.col("first_seen_month") * F.lit(two_pi / 12.0)),
-    )
-    features = features.withColumn(
+    ).withColumn(
         "first_seen_month_cos",
         F.cos(F.col("first_seen_month") * F.lit(two_pi / 12.0)),
     )
 
-    # Label: log1p(total_events).
+    # Label.
     features = features.withColumn(
         "label", F.log1p(F.col("total_events").cast("double"))
     )
 
-    # Keep columns relevant to modelling.
     feature_cols = [
         "repo_id",
         "language",
@@ -146,13 +174,11 @@ def build_feature_table(repos, events):
         *[f"{ev}_cnt" for ev in EVENT_TYPES],
         "label",
     ]
-    features = features.select(*feature_cols).na.drop()
-
-    return features
+    return features.select(*feature_cols).na.drop()
 
 
 def build_preprocessing_pipeline():
-    """Build the feature extraction pipeline (indexer + encoder + assembler)."""
+    """Build the feature extraction pipeline."""
     indexer = StringIndexer(
         inputCol="language",
         outputCol="language_idx",
@@ -179,37 +205,27 @@ def build_preprocessing_pipeline():
 
 
 def save_json(df, hdfs_path):
-    """Save a Spark DataFrame as a single JSON file on HDFS."""
-    (
-        df.coalesce(1)
+    """Save DataFrame as a single JSON file on HDFS."""
+    (df.coalesce(1)
         .write.mode("overwrite")
         .format("json")
-        .save(hdfs_path)
-    )
+        .save(hdfs_path))
 
 
 def save_csv(df, hdfs_path):
-    """Save a Spark DataFrame as a single CSV file (with header) on HDFS."""
-    (
-        df.coalesce(1)
+    """Save DataFrame as a single CSV (with header)."""
+    (df.coalesce(1)
         .write.mode("overwrite")
         .format("csv")
         .option("sep", ",")
         .option("header", "true")
-        .save(hdfs_path)
-    )
+        .save(hdfs_path))
 
 
 def train_evaluate(
-    name,
-    estimator,
-    param_grid,
-    train_df,
-    test_df,
-    evaluator_rmse,
-    evaluator_r2,
+    name, estimator, param_grid, train_df, test_df, evaluator_rmse, evaluator_r2
 ):
-    """Fit with CrossValidator, evaluate best model on test, persist outputs."""
+    """Fit via CrossValidator, evaluate best model, persist outputs."""
     print(f"\n=== {name}: grid search ===")
     cross_val = CrossValidator(
         estimator=estimator,
@@ -227,10 +243,7 @@ def train_evaluate(
     r2_score = evaluator_r2.evaluate(predictions)
     print(f"{name}: RMSE={rmse:.4f}  R2={r2_score:.4f}")
 
-    # Save model.
     best_model.write().overwrite().save(f"project/models/{name}")
-
-    # Save predictions (label + prediction only, single partition).
     save_csv(
         predictions.select("label", "prediction"),
         f"project/output/{name}_predictions.csv",
@@ -249,28 +262,32 @@ def main():
 
     repos, events = read_tables(spark)
     print(f"repositories_buck rows: {repos.count():,}")
-    print(f"events_part rows:       {events.count():,}")
+    print(f"events (raw AVRO) rows: {events.count():,}")
 
     features = build_feature_table(repos, events)
-    print(f"feature rows (repos):   {features.count():,}")
+    n_features = features.count()
+    print(f"feature rows (repos):   {n_features:,}")
+
+    if n_features == 0:
+        raise RuntimeError(
+            "Empty feature set: check repositories_buck and events AVRO."
+        )
 
     # Preprocessing pipeline.
     pre_pipeline = build_preprocessing_pipeline()
     pre_model = pre_pipeline.fit(features)
     transformed = pre_model.transform(features).select("features", "label")
 
-    # Train/test split (60/40, as in the template).
+    # 60 / 40 split.
     train_df, test_df = transformed.randomSplit([0.6, 0.4], seed=42)
     train_df = train_df.cache()
     test_df = test_df.cache()
     print(f"train rows: {train_df.count():,}")
     print(f"test  rows: {test_df.count():,}")
 
-    # Persist split to HDFS as JSON (single partition).
     save_json(train_df, "project/data/train")
     save_json(test_df, "project/data/test")
 
-    # Evaluators.
     evaluator_rmse = RegressionEvaluator(
         labelCol="label", predictionCol="prediction", metricName="rmse"
     )
@@ -278,7 +295,7 @@ def main():
         labelCol="label", predictionCol="prediction", metricName="r2"
     )
 
-    # --- Model 1: Linear Regression ------------------------------------
+    # --- Model 1: Linear Regression -----------------------------------
     lr = LinearRegression(featuresCol="features", labelCol="label")
     lr_grid = (
         ParamGridBuilder()
@@ -287,18 +304,13 @@ def main():
         .build()
     )
     _, rmse1, r2_1 = train_evaluate(
-        "model1",
-        lr,
-        lr_grid,
-        train_df,
-        test_df,
-        evaluator_rmse,
-        evaluator_r2,
+        "model1", lr, lr_grid, train_df, test_df,
+        evaluator_rmse, evaluator_r2,
     )
 
-    # --- Model 2: GBT Regressor ----------------------------------------
+    # --- Model 2: GBT Regressor ---------------------------------------
     gbt = GBTRegressor(
-        featuresCol="features", labelCol="label", seed=42, maxIter=40
+        featuresCol="features", labelCol="label", seed=42, maxIter=40,
     )
     gbt_grid = (
         ParamGridBuilder()
@@ -307,16 +319,11 @@ def main():
         .build()
     )
     _, rmse2, r2_2 = train_evaluate(
-        "model2",
-        gbt,
-        gbt_grid,
-        train_df,
-        test_df,
-        evaluator_rmse,
-        evaluator_r2,
+        "model2", gbt, gbt_grid, train_df, test_df,
+        evaluator_rmse, evaluator_r2,
     )
 
-    # --- Comparison ----------------------------------------------------
+    # --- Comparison ---------------------------------------------------
     comparison_rows = [
         ("LinearRegression", float(rmse1), float(r2_1)),
         ("GBTRegressor", float(rmse2), float(r2_2)),

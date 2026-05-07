@@ -5,7 +5,6 @@ echo "============================================"
 echo "Stage 3: Spark ML — train & evaluate models"
 echo "============================================"
 
-# Activate venv if it exists (for pylint, local deps).
 if [ -d "venv" ]; then
     source venv/bin/activate
 fi
@@ -18,6 +17,7 @@ echo "[1/2] Running scripts/model.py on YARN..."
 spark-submit \
     --master yarn \
     --deploy-mode client \
+    --packages org.apache.spark:spark-avro_2.12:3.2.4 \
     --conf "spark.sql.catalogImplementation=hive" \
     scripts/model.py
 
@@ -25,17 +25,14 @@ spark-submit \
 echo ""
 echo "[2/2] Fetching artifacts from HDFS..."
 
-# Train / test JSON.
 rm -f data/train.json data/test.json
 hdfs dfs -cat project/data/train/part-*.json > data/train.json
 hdfs dfs -cat project/data/test/part-*.json  > data/test.json
 
-# Models.
 rm -rf models/model1 models/model2
 hdfs dfs -get project/models/model1 models/model1
 hdfs dfs -get project/models/model2 models/model2
 
-# Predictions (single CSV each, with header).
 rm -f output/model1_predictions.csv output/model2_predictions.csv output/evaluation.csv
 hdfs dfs -cat project/output/model1_predictions.csv/part-*.csv \
     > output/model1_predictions.csv
