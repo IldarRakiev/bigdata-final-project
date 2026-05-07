@@ -41,6 +41,14 @@ DESCRIBE FORMATTED repositories_raw;
 DESCRIBE FORMATTED events_raw;
 
 -- ----------------------------------------------------------------
+-- Note on date types:
+--   Sqoop exports PostgreSQL DATE/TIMESTAMP as AVRO long (epoch
+--   milliseconds), so events_raw.event_date arrives as BIGINT and
+--   repositories_raw.first_seen_at arrives as STRING-of-millis.
+--   Hence the from_unixtime(... / 1000) conversion below.
+-- ----------------------------------------------------------------
+
+-- ----------------------------------------------------------------
 -- 2) Bucketed dimension table: repositories_buck
 --    Bucketed by repo_id for efficient joins with events_part.
 -- ----------------------------------------------------------------
@@ -48,7 +56,7 @@ DESCRIBE FORMATTED events_raw;
 CREATE EXTERNAL TABLE repositories_buck (
     repo_id       BIGINT,
     repo_name     STRING,
-    first_seen_at STRING,
+    first_seen_at TIMESTAMP,
     language      STRING
 )
 CLUSTERED BY (repo_id) INTO 16 BUCKETS
@@ -56,11 +64,11 @@ STORED AS AVRO
 LOCATION 'project/hive/warehouse/repositories_buck'
 TBLPROPERTIES ('avro.output.codec'='snappy');
 
-INSERT INTO repositories_buck
+INSERT OVERWRITE TABLE repositories_buck
 SELECT
     repo_id,
     repo_name,
-    first_seen_at,
+    CAST(from_unixtime(CAST(first_seen_at AS BIGINT) / 1000) AS TIMESTAMP) AS first_seen_at,
     language
 FROM repositories_raw;
 
@@ -84,16 +92,26 @@ STORED AS AVRO
 LOCATION 'project/hive/warehouse/events_part'
 TBLPROPERTIES ('avro.output.codec'='snappy');
 
-INSERT INTO events_part PARTITION (event_year, event_month)
+INSERT OVERWRITE TABLE events_part PARTITION (event_year, event_month)
 SELECT
     event_type,
     repo_id,
-    CAST(event_date AS DATE)             AS event_date,
+    event_date,
     event_count,
     unique_actors,
-    YEAR(CAST(event_date AS DATE))       AS event_year,
-    MONTH(CAST(event_date AS DATE))      AS event_month
-FROM events_raw;
+    YEAR(event_date)  AS event_year,
+    MONTH(event_date) AS event_month
+FROM (
+    SELECT
+        event_type,
+        repo_id,
+        CAST(from_unixtime(CAST(event_date AS BIGINT) / 1000) AS DATE) AS event_date,
+        event_count,
+        unique_actors
+    FROM events_raw
+    WHERE event_date IS NOT NULL
+) t
+WHERE event_date IS NOT NULL;
 
 -- ----------------------------------------------------------------
 -- 4) Drop unpartitioned/unbucketed raw tables (Stage 2 checklist).

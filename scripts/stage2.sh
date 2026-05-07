@@ -23,7 +23,7 @@ mkdir -p output
 
 # ---- 1. Upload AVRO schemas (from Stage 1) to HDFS ----
 echo ""
-echo "[1/3] Uploading AVRO schemas to HDFS..."
+echo "[1/4] Uploading AVRO schemas to HDFS..."
 if ! ls output/*.avsc 1>/dev/null 2>&1; then
     echo "ERROR: No .avsc files in output/. Run Stage 1 first (Sqoop generates schemas)."
     exit 1
@@ -34,9 +34,19 @@ hdfs dfs -put -f output/*.avsc project/warehouse/avsc/
 echo "  Schemas on HDFS:"
 hdfs dfs -ls project/warehouse/avsc
 
-# ---- 2. Build Hive database (partitioned + bucketed tables) ----
+# ---- 2. Wipe previous Hive warehouse contents ----
+# DROP DATABASE CASCADE in db.hql only removes Hive metadata; AVRO
+# files at the EXTERNAL-table LOCATIONs survive and would conflict
+# with a re-CREATE under a changed schema (e.g. first_seen_at:
+# STRING -> TIMESTAMP). Wipe the whole DB warehouse dir to start clean.
 echo ""
-echo "[2/3] Running sql/db.hql (database + partitioned/bucketed tables)..."
+echo "[2/4] Cleaning previous Hive warehouse on HDFS..."
+hdfs dfs -rm -r -f project/hive/warehouse
+echo "  Cleaned project/hive/warehouse"
+
+# ---- 3. Build Hive database (partitioned + bucketed tables) ----
+echo ""
+echo "[3/4] Running sql/db.hql (database + partitioned/bucketed tables)..."
 beeline -u "$HIVE_URL" \
     -n "$USER" \
     -p "$password" \
@@ -44,9 +54,9 @@ beeline -u "$HIVE_URL" \
     -f sql/db.hql \
     2>&1 | tee output/hive_results.txt
 
-# ---- 3. Run EDA queries q1..q6 and export each result as CSV ----
+# ---- 4. Run EDA queries q1..q6 and export each result as CSV ----
 echo ""
-echo "[3/3] Running EDA queries..."
+echo "[4/4] Running EDA queries..."
 for q in q1 q2 q3 q4 q5 q6; do
     echo ""
     echo "  --- $q.hql ---"
