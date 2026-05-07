@@ -62,7 +62,7 @@ INSERT OVERWRITE TABLE repositories_buck
 SELECT
     repo_id,
     repo_name,
-    CAST(from_unixtime(CAST(first_seen_at AS BIGINT) / 1000) AS TIMESTAMP) AS first_seen_at,
+    CAST(from_unixtime(CAST(first_seen_at AS BIGINT) DIV 1000) AS TIMESTAMP) AS first_seen_at,
     language
 FROM repositories_raw;
 
@@ -101,11 +101,11 @@ FROM (
          SELECT
              event_type,
              repo_id,
-             CAST(from_unixtime(CAST(event_date AS BIGINT) / 1000) AS DATE) AS event_date,
+             CAST(from_unixtime(CAST(event_date AS BIGINT) DIV 1000) AS DATE) AS event_date,
              event_count,
              unique_actors,
-             YEAR (CAST(from_unixtime(CAST(event_date AS BIGINT) / 1000) AS DATE)) AS event_year,
-             MONTH(CAST(from_unixtime(CAST(event_date AS BIGINT) / 1000) AS DATE)) AS event_month
+             YEAR (CAST(from_unixtime(CAST(event_date AS BIGINT) DIV 1000) AS DATE)) AS event_year,
+             MONTH(CAST(from_unixtime(CAST(event_date AS BIGINT) DIV 1000) AS DATE)) AS event_month
          FROM events_raw
          WHERE event_date IS NOT NULL
      ) t
