@@ -43,7 +43,7 @@ EVENT_TYPES = [
 ]
 
 # End of data window (June 30, 2024) — used to compute repo age.
-WINDOW_END = "Date6"
+WINDOW_END = "2024-06-30"
 
 
 def build_spark():
