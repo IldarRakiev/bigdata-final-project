@@ -51,9 +51,13 @@ def build_spark():
     return (
         SparkSession.builder.appName(f"{TEAM} - Stage 3 - Spark ML")
         .master("yarn")
+        .config(
+            "hive.metastore.uris",
+            "thrift://hadoop-02.uni.innopolis.ru:9883",
+        )
         .config("spark.sql.warehouse.dir", WAREHOUSE)
         .config("spark.sql.catalogImplementation", "hive")
-        .config("spark.jars.packages", "org.apache.spark:spark-avro_2.12:3.2.4")
+        .config("spark.sql.avro.compression.codec", "snappy")
         .enableHiveSupport()
         .getOrCreate()
     )
