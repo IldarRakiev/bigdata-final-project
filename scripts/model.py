@@ -1,0 +1,335 @@
+"""
+Stage 3 — Predictive Data Analytics with Spark ML.
+
+Task: Regression — predict log(total_events + 1) for each repository
+based on its language, age, first-seen time (cyclical encoded), and
+aggregated event-type counts.
+
+Pipeline:
+    1. Read Hive tables (repositories_buck, events_part).
+    2. Build a feature table (one row per repo).
+    3. Feature engineering: cyclical sin/cos for month, one-hot for language.
+    4. Train/test split (saved to HDFS as JSON).
+    5. Train two models (Linear Regression, GBT Regressor).
+    6. Tune hyper-parameters via CrossValidator + ParamGrid.
+    7. Save best models, predictions, and evaluation results to HDFS.
+
+Run:
+    spark-submit --master yarn scripts/model.py
+"""
+import math
+
+from pyspark.ml import Pipeline
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.feature import OneHotEncoder, StringIndexer, VectorAssembler
+from pyspark.ml.regression import GBTRegressor, LinearRegression
+from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+from pyspark.sql import SparkSession
+from pyspark.sql import functions as F
+
+TEAM = "team28"
+WAREHOUSE = "project/hive/warehouse"
+DB_NAME = f"{TEAM}_projectdb"
+
+EVENT_TYPES = [
+    "PushEvent",
+    "WatchEvent",
+    "ForkEvent",
+    "PullRequestEvent",
+    "IssuesEvent",
+    "CreateEvent",
+]
+
+# End of data window (June 30, 2024) — used to compute repo age.
+WINDOW_END = "2024-06-30"
+
+
+def build_spark():
+    """Create a Spark session connected to Hive Metastore on YARN."""
+    return (
+        SparkSession.builder.appName(f"{TEAM} - Stage 3 - Spark ML")
+        .master("yarn")
+        .config(
+            "hive.metastore.uris",
+            "thrift://hadoop-02.uni.innopolis.ru:9883",
+        )
+        .config("spark.sql.warehouse.dir", WAREHOUSE)
+        .config("spark.sql.avro.compression.codec", "snappy")
+        .enableHiveSupport()
+        .getOrCreate()
+    )
+
+
+def read_tables(spark):
+    """Read Hive tables as Spark DataFrames."""
+    repos = spark.read.table(f"{DB_NAME}.repositories_buck")
+    events = spark.read.table(f"{DB_NAME}.events_part")
+    return repos, events
+
+
+def build_feature_table(repos, events):
+    """Aggregate events by repo and join with repositories metadata.
+
+    Returns one row per repo with:
+      - language, first_seen_at (for feature engineering)
+      - per-event-type totals (PushEvent_cnt, ...)
+      - total_actors, active_months
+      - label = log(total_events + 1)
+    """
+    # Per-repo totals by event type (pivot).
+    per_type = (
+        events.groupBy("repo_id")
+        .pivot("event_type", EVENT_TYPES)
+        .agg(F.sum("event_count"))
+        .na.fill(0)
+    )
+    # Rename columns to _cnt suffix.
+    for ev in EVENT_TYPES:
+        per_type = per_type.withColumnRenamed(ev, f"{ev}_cnt")
+
+    # Totals across all event types.
+    totals = events.groupBy("repo_id").agg(
+        F.sum("event_count").alias("total_events"),
+        F.sum("unique_actors").alias("total_actors"),
+        F.countDistinct("event_year", "event_month").alias("active_months"),
+    )
+
+    features = totals.join(per_type, "repo_id", "inner").join(
+        repos, "repo_id", "inner"
+    )
+
+    # Keep only repos with a known language and first_seen_at.
+    features = features.filter(
+        F.col("language").isNotNull() & F.col("first_seen_at").isNotNull()
+    )
+
+    # Cast first_seen_at (STRING) to TIMESTAMP.
+    features = features.withColumn(
+        "first_seen_ts",
+        F.to_timestamp("first_seen_at"),
+    ).filter(F.col("first_seen_ts").isNotNull())
+
+    # Repo age in days (w.r.t. end of window).
+    features = features.withColumn(
+        "repo_age_days",
+        F.datediff(F.lit(WINDOW_END), F.col("first_seen_ts")),
+    )
+
+    # Cyclical sin/cos encoding of first-seen month (1..12).
+    features = features.withColumn(
+        "first_seen_month", F.month("first_seen_ts")
+    )
+    two_pi = 2.0 * math.pi
+    features = features.withColumn(
+        "first_seen_month_sin",
+        F.sin(F.col("first_seen_month") * F.lit(two_pi / 12.0)),
+    )
+    features = features.withColumn(
+        "first_seen_month_cos",
+        F.cos(F.col("first_seen_month") * F.lit(two_pi / 12.0)),
+    )
+
+    # Label: log1p(total_events).
+    features = features.withColumn(
+        "label", F.log1p(F.col("total_events").cast("double"))
+    )
+
+    # Keep columns relevant to modelling.
+    feature_cols = [
+        "repo_id",
+        "language",
+        "repo_age_days",
+        "first_seen_month_sin",
+        "first_seen_month_cos",
+        "total_actors",
+        "active_months",
+        *[f"{ev}_cnt" for ev in EVENT_TYPES],
+        "label",
+    ]
+    features = features.select(*feature_cols).na.drop()
+
+    return features
+
+
+def build_preprocessing_pipeline():
+    """Build the feature extraction pipeline (indexer + encoder + assembler)."""
+    indexer = StringIndexer(
+        inputCol="language",
+        outputCol="language_idx",
+        handleInvalid="keep",
+    )
+    encoder = OneHotEncoder(
+        inputCol="language_idx",
+        outputCol="language_ohe",
+    )
+    numeric_cols = [
+        "repo_age_days",
+        "first_seen_month_sin",
+        "first_seen_month_cos",
+        "total_actors",
+        "active_months",
+        *[f"{ev}_cnt" for ev in EVENT_TYPES],
+    ]
+    assembler = VectorAssembler(
+        inputCols=["language_ohe", *numeric_cols],
+        outputCol="features",
+        handleInvalid="skip",
+    )
+    return Pipeline(stages=[indexer, encoder, assembler])
+
+
+def save_json(df, hdfs_path):
+    """Save a Spark DataFrame as a single JSON file on HDFS."""
+    (
+        df.coalesce(1)
+        .write.mode("overwrite")
+        .format("json")
+        .save(hdfs_path)
+    )
+
+
+def save_csv(df, hdfs_path):
+    """Save a Spark DataFrame as a single CSV file (with header) on HDFS."""
+    (
+        df.coalesce(1)
+        .write.mode("overwrite")
+        .format("csv")
+        .option("sep", ",")
+        .option("header", "true")
+        .save(hdfs_path)
+    )
+
+
+def train_evaluate(
+    name,
+    estimator,
+    param_grid,
+    train_df,
+    test_df,
+    evaluator_rmse,
+    evaluator_r2,
+):
+    """Fit with CrossValidator, evaluate best model on test, persist outputs."""
+    print(f"\n=== {name}: grid search ===")
+    cross_val = CrossValidator(
+        estimator=estimator,
+        estimatorParamMaps=param_grid,
+        evaluator=evaluator_rmse,
+        numFolds=3,
+        parallelism=2,
+        seed=42,
+    )
+    cv_model = cross_val.fit(train_df)
+    best_model = cv_model.bestModel
+
+    predictions = best_model.transform(test_df)
+    rmse = evaluator_rmse.evaluate(predictions)
+    r2_score = evaluator_r2.evaluate(predictions)
+    print(f"{name}: RMSE={rmse:.4f}  R2={r2_score:.4f}")
+
+    # Save model.
+    best_model.write().overwrite().save(f"project/models/{name}")
+
+    # Save predictions (label + prediction only, single partition).
+    save_csv(
+        predictions.select("label", "prediction"),
+        f"project/output/{name}_predictions.csv",
+    )
+    return best_model, rmse, r2_score
+
+
+def main():
+    """End-to-end Stage 3 pipeline."""
+    spark = build_spark()
+    spark.sparkContext.setLogLevel("WARN")
+
+    print("=" * 60)
+    print("Stage 3 — Spark ML")
+    print("=" * 60)
+
+    repos, events = read_tables(spark)
+    print(f"repositories_buck rows: {repos.count():,}")
+    print(f"events_part rows:       {events.count():,}")
+
+    features = build_feature_table(repos, events)
+    print(f"feature rows (repos):   {features.count():,}")
+
+    # Preprocessing pipeline.
+    pre_pipeline = build_preprocessing_pipeline()
+    pre_model = pre_pipeline.fit(features)
+    transformed = pre_model.transform(features).select("features", "label")
+
+    # Train/test split (60/40, as in the template).
+    train_df, test_df = transformed.randomSplit([0.6, 0.4], seed=42)
+    train_df = train_df.cache()
+    test_df = test_df.cache()
+    print(f"train rows: {train_df.count():,}")
+    print(f"test  rows: {test_df.count():,}")
+
+    # Persist split to HDFS as JSON (single partition).
+    save_json(train_df, "project/data/train")
+    save_json(test_df, "project/data/test")
+
+    # Evaluators.
+    evaluator_rmse = RegressionEvaluator(
+        labelCol="label", predictionCol="prediction", metricName="rmse"
+    )
+    evaluator_r2 = RegressionEvaluator(
+        labelCol="label", predictionCol="prediction", metricName="r2"
+    )
+
+    # --- Model 1: Linear Regression ------------------------------------
+    lr = LinearRegression(featuresCol="features", labelCol="label")
+    lr_grid = (
+        ParamGridBuilder()
+        .addGrid(lr.regParam, [0.01, 0.1, 1.0])
+        .addGrid(lr.elasticNetParam, [0.0, 0.5, 1.0])
+        .build()
+    )
+    _, rmse1, r2_1 = train_evaluate(
+        "model1",
+        lr,
+        lr_grid,
+        train_df,
+        test_df,
+        evaluator_rmse,
+        evaluator_r2,
+    )
+
+    # --- Model 2: GBT Regressor ----------------------------------------
+    gbt = GBTRegressor(
+        featuresCol="features", labelCol="label", seed=42, maxIter=40
+    )
+    gbt_grid = (
+        ParamGridBuilder()
+        .addGrid(gbt.maxDepth, [3, 5, 7])
+        .addGrid(gbt.maxBins, [32, 64])
+        .build()
+    )
+    _, rmse2, r2_2 = train_evaluate(
+        "model2",
+        gbt,
+        gbt_grid,
+        train_df,
+        test_df,
+        evaluator_rmse,
+        evaluator_r2,
+    )
+
+    # --- Comparison ----------------------------------------------------
+    comparison_rows = [
+        ("LinearRegression", float(rmse1), float(r2_1)),
+        ("GBTRegressor", float(rmse2), float(r2_2)),
+    ]
+    comparison_df = spark.createDataFrame(
+        comparison_rows, ["model", "RMSE", "R2"]
+    )
+    comparison_df.show(truncate=False)
+    save_csv(comparison_df, "project/output/evaluation.csv")
+
+    print("Stage 3 finished successfully.")
+    spark.stop()
+
+
+if __name__ == "__main__":
+    main()
