@@ -17,6 +17,8 @@ Where:
     post_watches = WatchEvent count in [2024-01-01, 2024-06-30]
 
 Reference: Borges & Valente, "What's in a GitHub Star?" (MSR 2018).
+
+Run via scripts/stage3.sh, which spark-submits this module on YARN.
 """
 
 import argparse

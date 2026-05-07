@@ -3,6 +3,10 @@ set -euo pipefail
 
 echo "Stage 3: Spark ML on YARN"
 
+if [ -d "venv" ]; then
+    source venv/bin/activate
+fi
+
 mkdir -p output models
 
 SUCCESS_STARS_MIN="${SUCCESS_STARS_MIN:-500}"
@@ -21,9 +25,11 @@ spark-submit \
     --executor-memory 4G \
     --executor-cores 2 \
     --driver-memory 2G \
+    --packages org.apache.spark:spark-avro_2.12:3.2.4 \
     --conf spark.sql.warehouse.dir=project/hive/warehouse \
+    --conf spark.sql.catalogImplementation=hive \
     --conf spark.hadoop.hive.metastore.uris=thrift://hadoop-02.uni.innopolis.ru:9883 \
-    scripts/stage3.py \
+    scripts/model.py \
         --success-stars-min "$SUCCESS_STARS_MIN" \
         --success-growth-min "$SUCCESS_GROWTH_MIN" \
         --min-pre-events "$MIN_PRE_EVENTS" \
@@ -44,3 +50,13 @@ for name in rf svm nb; do
         echo "  WARN: $HDFS_MODELS_DIR/$name not found on HDFS"
     fi
 done
+
+echo ""
+echo "============================================"
+echo "Stage 3 complete!"
+echo "  Metrics:           output/stage3_metrics.csv"
+echo "  Sample features:   output/stage3_sample_features.csv"
+echo "  Sample prediction: output/stage3_sample_prediction.csv"
+echo "  Trained models:    models/{rf,svm,nb}/"
+echo "  Driver log:        output/stage3.log"
+echo "============================================"
