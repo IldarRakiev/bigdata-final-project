@@ -1,9 +1,4 @@
--- ============================================================
--- q2 — Monthly events trend (Jan 2023 – Jun 2024)
--- ============================================================
--- Aggregates total events + unique active repos per month.
--- Uses partition columns directly for fast scan.
--- ============================================================
+-- q2 — Monthly WatchEvent (star) dynamics
 
 USE team28_projectdb;
 
@@ -12,11 +7,11 @@ SET hive.execution.engine=tez;
 DROP TABLE IF EXISTS q2_results;
 
 CREATE EXTERNAL TABLE q2_results (
-    event_year    INT,
-    event_month   INT,
-    total_events  BIGINT,
-    active_repos  BIGINT,
-    active_actors BIGINT
+    event_year                 INT,
+    event_month                INT,
+    monthly_stars              BIGINT,
+    repos_starred              BIGINT,
+    avg_stars_per_starred_repo DOUBLE
 )
 ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
 STORED AS TEXTFILE
@@ -26,9 +21,14 @@ INSERT OVERWRITE TABLE q2_results
 SELECT
     event_year,
     event_month,
-    SUM(event_count)         AS total_events,
-    COUNT(DISTINCT repo_id)  AS active_repos,
-    SUM(unique_actors)       AS active_actors
+    SUM(CASE WHEN event_type = 'WatchEvent'
+             THEN event_count ELSE 0 END)                            AS monthly_stars,
+    COUNT(DISTINCT CASE WHEN event_type = 'WatchEvent'
+                        THEN repo_id END)                            AS repos_starred,
+    ROUND(SUM(CASE WHEN event_type = 'WatchEvent'
+                   THEN event_count ELSE 0 END) /
+          NULLIF(COUNT(DISTINCT CASE WHEN event_type = 'WatchEvent'
+                                     THEN repo_id END), 0), 2)       AS avg_stars_per_starred_repo
 FROM events_part
 GROUP BY event_year, event_month
 ORDER BY event_year, event_month;
