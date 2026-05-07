@@ -103,14 +103,7 @@ def normalise_first_seen(col):
 
 
 def build_feature_table(repos, events):
-    """Aggregate events by repo and join with repositories metadata.
-
-    Returns one row per repo with:
-      - language (categorical), first_seen_ts (for age + cyclic month)
-      - per-event-type totals (PushEvent_cnt, ...)
-      - total_actors, active_months
-      - label = log(total_events + 1)
-    """
+    """Aggregate events by repo and join with repositories metadata."""
     # Per-repo totals by event type (pivot).
     per_type = (
         events.groupBy("repo_id")
@@ -121,38 +114,43 @@ def build_feature_table(repos, events):
     for ev in EVENT_TYPES:
         per_type = per_type.withColumnRenamed(ev, f"{ev}_cnt")
 
-    # Totals across all event types + active months proxy.
-    totals = events.groupBy("repo_id").agg(
+    # Totals across all event types.
+    # event_date is stored as epoch-millis BIGINT; derive YYYY-MM for active_months.
+    events_with_month = events.withColumn(
+        "event_month_key",
+        F.date_format(
+            F.to_timestamp((F.col("event_date").cast("double") / 1000.0)),
+            "yyyy-MM",
+        ),
+    )
+    totals = events_with_month.groupBy("repo_id").agg(
         F.sum("event_count").alias("total_events"),
         F.sum("unique_actors").alias("total_actors"),
-        F.countDistinct(F.substring(F.col("event_date").cast("string"), 1, 7))
-            .alias("active_months"),
+        F.countDistinct("event_month_key").alias("active_months"),
     )
 
     features = totals.join(per_type, "repo_id", "inner").join(
         repos, "repo_id", "inner"
     )
 
-    # Keep only repos with known language and first_seen_at.
-    features = features.filter(
-        F.col("language").isNotNull() & F.col("first_seen_at").isNotNull()
+    # Replace missing language with a sentinel category (keeps the row).
+    features = features.withColumn(
+        "language", F.coalesce(F.col("language"), F.lit("Unknown"))
     )
 
-    # Timestamp.
+    # first_seen_at is epoch-millis stored as STRING.
     features = features.withColumn(
-        "first_seen_ts", normalise_first_seen("first_seen_at")
+        "first_seen_ts",
+        F.to_timestamp(F.col("first_seen_at").cast("double") / 1000.0),
     ).filter(F.col("first_seen_ts").isNotNull())
 
-    # Repo age in days.
     features = features.withColumn(
         "repo_age_days",
         F.datediff(F.lit(WINDOW_END), F.col("first_seen_ts")),
-    )
-
-    # Cyclical sin/cos encoding of month.
-    features = features.withColumn(
+    ).withColumn(
         "first_seen_month", F.month("first_seen_ts")
     )
+
     two_pi = 2.0 * math.pi
     features = features.withColumn(
         "first_seen_month_sin",
@@ -162,7 +160,6 @@ def build_feature_table(repos, events):
         F.cos(F.col("first_seen_month") * F.lit(two_pi / 12.0)),
     )
 
-    # Label.
     features = features.withColumn(
         "label", F.log1p(F.col("total_events").cast("double"))
     )
@@ -178,7 +175,10 @@ def build_feature_table(repos, events):
         *[f"{ev}_cnt" for ev in EVENT_TYPES],
         "label",
     ]
-    return features.select(*feature_cols).na.drop()
+    # Drop rows only where numeric inputs are null (language already filled).
+    return features.select(*feature_cols).na.drop(
+        subset=["repo_age_days", "total_actors", "active_months", "label"]
+    )
 
 
 def build_preprocessing_pipeline():
