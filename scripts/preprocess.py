@@ -42,6 +42,17 @@ def load_events(data_dir):
     pattern = os.path.join(data_dir, "events_daily*.csv")
     parts = sorted(glob.glob(pattern))
     if not parts:
+        # # PREPROCESS_IDEMPOTENT_V1
+        # If the cleaned fact table already exists, this is a rerun after
+        # Stage 0 was completed earlier — skip cleanly instead of failing,
+        # so main.sh can proceed to Stage 1+.
+        clean_path = os.path.join(data_dir, "events_clean.csv")
+        if os.path.isfile(clean_path):
+            print(
+                f"  INFO: {clean_path} already present and no raw "
+                f"events_daily.csv in {data_dir}/ — skipping Stage 0.",
+            )
+            sys.exit(0)
         print(
             f"ERROR: No events CSV found in {data_dir}/. "
             "Expected events_daily.csv.",
