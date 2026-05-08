@@ -7,6 +7,13 @@ bash scripts/preprocess.sh
 echo "Running Stage 1 of the pipeline - PostgreSQL + Sqoop"
 bash scripts/stage1.sh
 
+# STAGE1_GUARD_V1
+if [[ $? -ne 0 ]]; then
+    echo "FATAL: Stage 1 failed. Aborting." >&2
+    exit 1
+fi
+
+
 echo "Running Stage 2 of the pipeline - Hive + Spark SQL"
 bash scripts/stage2.sh
 

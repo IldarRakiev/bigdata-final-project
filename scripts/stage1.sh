@@ -1,31 +1,37 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 echo "Stage 1: PostgreSQL + Sqoop"
 
-# Create and activate virtual environment
+# venv
 if [ ! -d "venv" ]; then
     python3 -m venv venv
 fi
 source venv/bin/activate
 pip install -r requirements.txt --quiet
 
-# ---- Configuration ----
 password=$(head -n 1 secrets/.psql.pass)
 JDBC_URL="jdbc:postgresql://hadoop-04.uni.innopolis.ru/team28_projectdb"
 WAREHOUSE_DIR="project/warehouse"
 
-# ---- Step 1: Build PostgreSQL database ----
+# --- HDFS quota sanity check ---
+echo ""
+echo "[0/2] HDFS quota check..."
+hdfs dfs -count -q -h /user/team28 || true
+echo "  (raw CSVs are ~2.3 GB; with ×3 replication Sqoop needs ~7 GB free)"
+
+# --- PostgreSQL ---
 echo ""
 echo "[1/2] Building PostgreSQL database..."
 python3 scripts/build_projectdb.py
 
-# ---- Step 2: Import into HDFS via Sqoop ----
+# --- Sqoop ---
 echo ""
 echo "[2/2] Importing data into HDFS via Sqoop..."
-
-# Clear target directory if it exists
-hadoop fs -rm -r -f "$WAREHOUSE_DIR"
+# skipTrash so we don't eat our own quota with every rerun
+hadoop fs -rm -r -f -skipTrash "$WAREHOUSE_DIR" || true
+# also flush Trash that piled up from previous runs
+hdfs dfs -expunge || true
 
 sqoop import-all-tables \
     --connect "$JDBC_URL" \
@@ -37,21 +43,26 @@ sqoop import-all-tables \
     --warehouse-dir="$WAREHOUSE_DIR" \
     --m 1
 
-# Save generated AVRO schema and Java files for Stage 2
-mv *.avsc output/ 2>/dev/null || true
-mv *.java output/ 2>/dev/null || true
+# Move generated schema/java next to the project (best-effort).
+mv ./*.avsc output/ 2>/dev/null || true
+mv ./*.java output/ 2>/dev/null || true
 
+# Hard verification — fail if directories are empty.
 echo ""
 echo "Verifying HDFS data..."
-echo "--- repositories ---"
-hadoop fs -ls "$WAREHOUSE_DIR/repositories"
-echo "--- events ---"
-hadoop fs -ls "$WAREHOUSE_DIR/events"
+for sub in repositories events; do
+    echo "--- $sub ---"
+    if ! hadoop fs -ls "$WAREHOUSE_DIR/$sub" 2>/dev/null | grep -q part-m; then
+        echo "FATAL: Sqoop produced no part-m-* files in $WAREHOUSE_DIR/$sub" >&2
+        hdfs dfs -count -q -h /user/team28 >&2 || true
+        exit 3
+    fi
+    hadoop fs -ls -h "$WAREHOUSE_DIR/$sub"
+done
 
 echo ""
 echo "============================================"
 echo "Stage 1 complete!"
 echo "  PostgreSQL: team28_projectdb (2 tables)"
 echo "  HDFS:       /user/team28/$WAREHOUSE_DIR"
-echo "  AVRO schemas: output/*.avsc"
 echo "============================================"
