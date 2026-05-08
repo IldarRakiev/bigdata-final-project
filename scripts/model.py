@@ -209,6 +209,18 @@ def main():
         .enableHiveSupport()
         .getOrCreate()
     )
+
+    # STAGE3_SANITY_GUARD_V1
+    spark.sparkContext.setLogLevel("WARN")
+    spark.sql(f"USE {HIVE_DB}")
+    _n_events = spark.sql("SELECT COUNT(*) AS c FROM events_part").collect()[0]["c"]
+    _n_repos = spark.sql("SELECT COUNT(*) AS c FROM repositories_buck").collect()[0]["c"]
+    print(f"  events_part rows:    {_n_events:,}")
+    print(f"  repositories_buck:   {_n_repos:,}")
+    if _n_events == 0:
+        print("FATAL: events_part is empty. Stage 2 (Hive INSERT) failed. "
+              "Fix Stage 2 and rerun — Stage 3 aborted.", file=sys.stderr)
+        spark.stop(); sys.exit(2)
     spark.sparkContext.setLogLevel("WARN")
 
     print("=" * 60)

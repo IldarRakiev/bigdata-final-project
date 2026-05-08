@@ -32,11 +32,29 @@ SET hive.enforce.bucketing=true;
 -- (streams one partition at a time through the reducer, so the mapper
 -- never buffers 18 open writers at once) is what actually fits on the
 -- team cluster (3 executors × 1 GB quota per node -> shared pool).
+-- TEZ_MEM_BLOCK_V2
+-- Tez resources.
+-- On this cluster:
+--   * mapper OOM at default 512 MB  -> bump container & JVM
+--   * reducer OOM with sort.dynamic.partition=true on 44M rows
+--     -> also lift reduce-side memory AND force more/smaller reducers
 SET tez.am.resource.memory.mb=2048;
 SET hive.tez.container.size=4096;
 SET hive.tez.java.opts=-Xmx3200m;
 SET tez.task.resource.memory.mb=4096;
+SET mapreduce.map.memory.mb=4096;
+SET mapreduce.map.java.opts=-Xmx3200m;
+SET mapreduce.reduce.memory.mb=4096;
+SET mapreduce.reduce.java.opts=-Xmx3200m;
+
+-- Force more, smaller reducers so each streams a manageable slice.
+-- Default bytes.per.reducer=256MB -> ~2 reducers for 44M avro rows, OOM.
+-- 64 MB/reducer -> ~8 reducers, each handling ~5-6M rows.
+SET hive.exec.reducers.bytes.per.reducer=67108864;
+SET hive.exec.reducers.max=64;
+
 SET hive.optimize.sort.dynamic.partition=true;
+
 
 SET hive.auto.convert.join=true;
 

@@ -1,4 +1,7 @@
 #!/bin/bash
+# STAGE_STRICT_MODE_V1
+set -euo pipefail
+
 
 # Pre-processing
 echo "Running pre-processing"
