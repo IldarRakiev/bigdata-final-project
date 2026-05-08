@@ -17,9 +17,14 @@ SET hive.exec.max.dynamic.partitions=1000;
 SET hive.exec.max.dynamic.partitions.pernode=1000;
 SET hive.enforce.bucketing=true;
 
--- Output compression (AVRO + Snappy)
-SET hive.exec.compress.output=true;
-SET avro.output.codec=snappy;
+-- IMPORTANT: do NOT set hive.exec.compress.output / avro.output.codec here.
+-- On this cluster those session-wide flags interact badly with
+-- hive.optimize.sort.dynamic.partition + AvroSerDe: the reducer silently
+-- drops the partition keys and writes every row into (event_year=NULL,
+-- event_month=NULL), which then fails to register — the table ends up
+-- with 0 rows / 0 partitions despite the INSERT "succeeding".
+-- Per-table Snappy is already declared via TBLPROPERTIES('avro.output.codec'='snappy')
+-- on both repositories_buck and events_part below, which is sufficient.
 
 -- Tez resources.
 -- Default 512 MB containers OOM on the 44M-row INSERT with dynamic
