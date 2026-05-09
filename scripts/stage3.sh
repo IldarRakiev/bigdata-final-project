@@ -11,10 +11,14 @@ fi
 
 mkdir -p data output models
 
-SUCCESS_STARS_MIN="${SUCCESS_STARS_MIN:-500}"
-SUCCESS_GROWTH_MIN="${SUCCESS_GROWTH_MIN:-3.0}"
+# Defaults aligned with model.py and the project rubric.
+# pre-2024 watches are sparse, so STARS=10/GROWTH=2x gives ~1.7k positives
+# out of ~2.1M repos (≈0.08%), which is a workable class ratio for AUPR.
+SUCCESS_STARS_MIN="${SUCCESS_STARS_MIN:-10}"
+SUCCESS_GROWTH_MIN="${SUCCESS_GROWTH_MIN:-2.0}"
 MIN_PRE_EVENTS="${MIN_PRE_EVENTS:-5}"
-CV_FOLDS="${CV_FOLDS:-4}"
+CV_FOLDS="${CV_FOLDS:-3}"
+
 HDFS_MODELS_DIR="${HDFS_MODELS_DIR:-project/models}"
 HDFS_DATA_DIR="${HDFS_DATA_DIR:-project/data}"
 HDFS_OUTPUT_DIR="${HDFS_OUTPUT_DIR:-project/output}"
@@ -77,12 +81,12 @@ merge_from_hdfs() {
     fi
 }
 
-merge_from_hdfs "$HDFS_DATA_DIR/train"             data/train.json
-merge_from_hdfs "$HDFS_DATA_DIR/test"              data/test.json
-merge_from_hdfs "$HDFS_OUTPUT_DIR/rf_predictions.csv"  output/rf_predictions.csv
-merge_from_hdfs "$HDFS_OUTPUT_DIR/svm_predictions.csv" output/svm_predictions.csv
-merge_from_hdfs "$HDFS_OUTPUT_DIR/nb_predictions.csv"  output/nb_predictions.csv
-merge_from_hdfs "$HDFS_OUTPUT_DIR/evaluation.csv"      output/evaluation.csv
+merge_from_hdfs "$HDFS_DATA_DIR/train"                  data/train.json
+merge_from_hdfs "$HDFS_DATA_DIR/test"                   data/test.json
+merge_from_hdfs "$HDFS_OUTPUT_DIR/rf_predictions.csv"   output/rf_predictions.csv
+merge_from_hdfs "$HDFS_OUTPUT_DIR/svm_predictions.csv"  output/svm_predictions.csv
+merge_from_hdfs "$HDFS_OUTPUT_DIR/nb_predictions.csv"   output/nb_predictions.csv
+merge_from_hdfs "$HDFS_OUTPUT_DIR/stage3_metrics.csv"       output/stage3_metrics.csv
 
 echo ""
 echo "============================================"
@@ -90,7 +94,7 @@ echo "Stage 3 complete!"
 echo "  Train/test splits: data/train.json, data/test.json"
 echo "  Trained models:    models/{rf,svm,nb}/"
 echo "  Predictions:       output/{rf,svm,nb}_predictions.csv"
-echo "  Evaluation:        output/evaluation.csv"
+echo "  Evaluation:        output/stage3_metrics.csv"
 echo "  Sample features:   output/stage3_sample_features.csv"
 echo "  Sample prediction: output/stage3_sample_prediction.csv"
 echo "  Driver log:        output/stage3.log"
