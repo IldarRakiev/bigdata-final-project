@@ -321,11 +321,11 @@ def main():
              .csv(predictions_path))
         print(f"  saved test predictions to (HDFS): {predictions_path}", flush=True)
 
-    # Comparison dataframe — required artifact (project/output/evaluation.csv).
+    # Comparison dataframe — required artifact (project/output/stage3_metrics.csv).
     eval_rows = [(m["model"], float(m["auroc"]), float(m["aupr"])) for m in metrics]
     eval_df = spark.createDataFrame(eval_rows, ["model", "AUROC", "AUPR"])
     eval_df.show(truncate=False)
-    eval_hdfs = f"{args.predictions_dir}/evaluation.csv"
+    eval_hdfs = f"{args.predictions_dir}/stage3_metrics.csv"
     (eval_df.coalesce(1)
             .write.mode("overwrite")
             .option("header", "true")
@@ -333,7 +333,7 @@ def main():
     print(f"Evaluation saved to (HDFS): {eval_hdfs}", flush=True)
 
     # And a local copy for direct inspection in the repo (header matches HDFS).
-    eval_local = os.path.join(args.output_dir, "evaluation.csv")
+    eval_local = os.path.join(args.output_dir, "stage3_metrics.csv")
     local_rows = [{"model": m["model"], "AUROC": m["auroc"], "AUPR": m["aupr"]}
                   for m in metrics]
     write_csv(local_rows, ["model", "AUROC", "AUPR"], eval_local)
