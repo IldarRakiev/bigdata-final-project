@@ -10,28 +10,61 @@ CREATE EXTERNAL TABLE q4_results (
     STORED AS TEXTFILE
     LOCATION 'project/hive/warehouse/q4_results';
 
-DROP TABLE IF EXISTS q4_thresholds_tmp;
-CREATE TABLE q4_thresholds_tmp (stars_min INT, growth_min DOUBLE)
-    ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
-    STORED AS TEXTFILE;
-
-LOAD DATA LOCAL INPATH 'data/q4_thresholds.csv' INTO TABLE q4_thresholds_tmp;
-
 INSERT OVERWRITE TABLE q4_results
-SELECT th.stars_min, th.growth_min, COUNT(*),
-       SUM(CASE WHEN per.post_w >= th.stars_min AND per.pre_w > 0
-           AND per.post_w >= th.growth_min * per.pre_w THEN 1 ELSE 0 END),
-       ROUND(100.0 * SUM(CASE WHEN per.post_w >= th.stars_min AND per.pre_w > 0
-           AND per.post_w >= th.growth_min * per.pre_w THEN 1 ELSE 0 END) / COUNT(*), 5)
-FROM (
-         SELECT repo_id,
-                SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
-                SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
-         FROM events_part GROUP BY repo_id
-     ) per
-         CROSS JOIN q4_thresholds_tmp th
-GROUP BY th.stars_min, th.growth_min
-ORDER BY th.stars_min, th.growth_min;
+SELECT 100, 2.0, COUNT(*),
+       SUM(CASE WHEN post_w >= 100 AND pre_w > 0 AND post_w >= 2.0*pre_w THEN 1 ELSE 0 END),
+       ROUND(100.0*SUM(CASE WHEN post_w >= 100 AND pre_w > 0 AND post_w >= 2.0*pre_w THEN 1 ELSE 0 END)/COUNT(*),5)
+FROM (SELECT repo_id,
+             SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
+             SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
+      FROM events_part GROUP BY repo_id) p
+UNION ALL
+SELECT 100, 3.0, COUNT(*),
+       SUM(CASE WHEN post_w >= 100 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END),
+       ROUND(100.0*SUM(CASE WHEN post_w >= 100 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END)/COUNT(*),5)
+FROM (SELECT repo_id,
+             SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
+             SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
+      FROM events_part GROUP BY repo_id) p
+UNION ALL
+SELECT 250, 2.0, COUNT(*),
+       SUM(CASE WHEN post_w >= 250 AND pre_w > 0 AND post_w >= 2.0*pre_w THEN 1 ELSE 0 END),
+       ROUND(100.0*SUM(CASE WHEN post_w >= 250 AND pre_w > 0 AND post_w >= 2.0*pre_w THEN 1 ELSE 0 END)/COUNT(*),5)
+FROM (SELECT repo_id,
+             SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
+             SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
+      FROM events_part GROUP BY repo_id) p
+UNION ALL
+SELECT 250, 3.0, COUNT(*),
+       SUM(CASE WHEN post_w >= 250 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END),
+       ROUND(100.0*SUM(CASE WHEN post_w >= 250 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END)/COUNT(*),5)
+FROM (SELECT repo_id,
+             SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
+             SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
+      FROM events_part GROUP BY repo_id) p
+UNION ALL
+SELECT 500, 2.0, COUNT(*),
+       SUM(CASE WHEN post_w >= 500 AND pre_w > 0 AND post_w >= 2.0*pre_w THEN 1 ELSE 0 END),
+       ROUND(100.0*SUM(CASE WHEN post_w >= 500 AND pre_w > 0 AND post_w >= 2.0*pre_w THEN 1 ELSE 0 END)/COUNT(*),5)
+FROM (SELECT repo_id,
+             SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
+             SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
+      FROM events_part GROUP BY repo_id) p
+UNION ALL
+SELECT 500, 3.0, COUNT(*),
+       SUM(CASE WHEN post_w >= 500 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END),
+       ROUND(100.0*SUM(CASE WHEN post_w >= 500 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END)/COUNT(*),5)
+FROM (SELECT repo_id,
+             SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
+             SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
+      FROM events_part GROUP BY repo_id) p
+UNION ALL
+SELECT 1000, 3.0, COUNT(*),
+       SUM(CASE WHEN post_w >= 1000 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END),
+       ROUND(100.0*SUM(CASE WHEN post_w >= 1000 AND pre_w > 0 AND post_w >= 3.0*pre_w THEN 1 ELSE 0 END)/COUNT(*),5)
+FROM (SELECT repo_id,
+             SUM(CASE WHEN event_year=2023 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS pre_w,
+             SUM(CASE WHEN event_year=2024 AND event_type='WatchEvent' THEN event_count ELSE 0 END) AS post_w
+      FROM events_part GROUP BY repo_id) p;
 
-DROP TABLE q4_thresholds_tmp;
-SELECT * FROM q4_results;
+SELECT * FROM q4_results ORDER BY stars_min, growth_min;
