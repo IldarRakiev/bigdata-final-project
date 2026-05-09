@@ -17,9 +17,14 @@ echo "============================================"
 echo "Stage 4: Apache Superset dashboard"
 echo "============================================"
 
+HIVE_HOST="${HIVE_HOST:-hadoop-03.uni.innopolis.ru}"
+HIVE_PORT="${HIVE_PORT:-10001}"
+HIVE_URL="jdbc:hive2://${HIVE_HOST}:${HIVE_PORT}"
+USER="team28"
+
 # ---- 1. Data prerequisites for the dashboard ----
 echo ""
-echo "[1/3] Checking prerequisites from Stages 2-3..."
+echo "[1/4] Checking prerequisites from Stages 2-3..."
 
 required=(
     output/q1.csv
@@ -52,9 +57,29 @@ if [ "$missing" -gt 0 ]; then
     exit 1
 fi
 
-# ---- 2. Charts exported from Superset (manual UI step) ----
+# ---- 2. Register Hive external tables over Stage 3 outputs ----
+# Spark dropped the Stage 3 evaluation + per-model predictions on
+# HDFS as CSV directories. Superset talks to Hive, so we expose them
+# as external tables (`stage3_metrics`, `rf/svm/nb_predictions`).
 echo ""
-echo "[2/3] Charts exported from Superset..."
+echo "[2/4] Registering Hive tables for the dashboard..."
+if [ -f secrets/.hive.pass ]; then
+    password=$(head -n 1 secrets/.hive.pass)
+    beeline -u "$HIVE_URL" \
+        -n "$USER" \
+        -p "$password" \
+        --silent=true \
+        -f sql/dashboard_tables.hql \
+        2>&1 | tee -a output/hive_results.txt
+    echo "  Tables registered (stage3_metrics, rf/svm/nb_predictions)."
+else
+    echo "  WARN: secrets/.hive.pass not found — skipping Hive registration."
+    echo "  (Anna can still upload the CSVs to Superset directly.)"
+fi
+
+# ---- 3. Charts exported from Superset (manual UI step) ----
+echo ""
+echo "[3/4] Charts exported from Superset..."
 
 chart_jpgs=(
     output/q1.jpg
@@ -87,10 +112,10 @@ else
     echo "  pending  output/dashboard.json (Superset export)"
 fi
 
-# ---- 3. What to do next, if anything is pending ----
+# ---- 4. What to do next, if anything is pending ----
 if [ "$exported" -lt "${#chart_jpgs[@]}" ] || [ ! -f output/dashboard.jpg ]; then
     echo ""
-    echo "[3/3] Manual steps still required:"
+    echo "[4/4] Manual steps still required:"
     echo "  1. Open Apache Superset on the cluster."
     echo "  2. Follow notebooks/superset_runbook.md to build:"
     echo "     - 6 EDA charts (q1..q6)"
@@ -102,7 +127,7 @@ if [ "$exported" -lt "${#chart_jpgs[@]}" ] || [ ! -f output/dashboard.jpg ]; the
     echo "     (Dashboards -> ... -> Export to YAML/JSON)."
 else
     echo ""
-    echo "[3/3] All Superset artifacts present."
+    echo "[4/4] All Superset artifacts present."
 fi
 
 echo ""
