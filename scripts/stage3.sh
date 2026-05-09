@@ -36,6 +36,7 @@ spark-submit \
         --cv-folds "$CV_FOLDS" \
         --output-dir output \
         --models-dir "$HDFS_MODELS_DIR" \
+        "$@" \
     2>&1 | tee output/stage3.log
 
 # ---- Mirror trained models from HDFS to local models/ ----
@@ -47,7 +48,7 @@ for name in rf svm nb; do
         hdfs dfs -copyToLocal "$HDFS_MODELS_DIR/$name" "models/$name"
         echo "  models/$name <- $HDFS_MODELS_DIR/$name"
     else
-        echo "  WARN: $HDFS_MODELS_DIR/$name not found on HDFS"
+        echo "  skipped: $HDFS_MODELS_DIR/$name not on HDFS (model not trained this run)"
     fi
 done
 

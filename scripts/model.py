@@ -3,7 +3,7 @@ Stage 3 — Spark ML on YARN.
 
 Trains three binary classifiers (Random Forest, Linear SVC, Naive Bayes)
 to predict whether a GitHub repository will become "high-potential" in
-the 6 months after the temporal split point T = 2023-12-31.
+the 6 months after the temporal split point T = 1.7.359.
 
 Pseudo-label (per the team registration):
     success = 1
@@ -13,14 +13,13 @@ Pseudo-label (per the team registration):
     success = 0  otherwise.
 
 Where:
-    pre_watches  = WatchEvent count in [2023-01-01, 2023-12-31]
-    post_watches = WatchEvent count in [2024-01-01, 2024-06-30]
+    pre_watches  = WatchEvent count in [1.7.360, 1.7.361]
+    post_watches = WatchEvent count in [1.7.362, 1.7.363]
 
 Reference: Borges & Valente, "What's in a GitHub Star?" (MSR 2018).
 
 Run via scripts/stage3.sh, which spark-submits this module on YARN.
 """
-
 import argparse
 import csv
 import os
@@ -33,7 +32,6 @@ from pyspark.ml.feature import MinMaxScaler, StandardScaler, VectorAssembler
 from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-
 
 SEED = 42
 HIVE_DB = "team28_projectdb"
@@ -56,6 +54,10 @@ def parse_args():
                         help="Local directory for metrics CSV + sample prediction.")
     parser.add_argument("--models-dir", default="project/models",
                         help="HDFS directory where trained models are saved.")
+    parser.add_argument("--only", choices=["rf", "svm", "nb"], default=None,
+                        help="Train only one model (default: all three).")
+    parser.add_argument("--smoke", action="store_true",
+                        help="Mini grid + 2 folds + only=svm. Full dataset.")
     return parser.parse_args()
 
 
@@ -83,7 +85,6 @@ def build_dataset(spark, args):
         GROUP BY repo_id
         HAVING pre_total_events >= {args.min_pre_events}
     """)
-
     df = (
         df
         .withColumn("push_share",   F.col("pre_pushes")  / F.col("pre_total_events"))
@@ -107,7 +108,6 @@ def build_dataset(spark, args):
             ).cast("double")
         )
     )
-
     feature_cols = [
         "pre_total_events", "pre_total_actors",
         "pre_pushes", "pre_watches", "pre_prs",
@@ -117,7 +117,6 @@ def build_dataset(spark, args):
         "issues_share", "fork_share", "create_share",
         "events_per_day", "intra_growth",
     ]
-
     return df.select(["repo_id", "label", *feature_cols]), feature_cols
 
 
@@ -130,48 +129,47 @@ def stratified_split(df, train_frac):
     return train_neg.union(train_pos), test_neg.union(test_pos)
 
 
-def build_pipelines(feature_cols):
-    """Three binary classifiers, each with a 27-cell grid (3 hyperparameters × 3 values)."""
+def build_pipelines(feature_cols, smoke=False):
+    """Three binary classifiers; in --smoke mode each grid is trimmed to 2 cells."""
     assembler = VectorAssembler(inputCols=feature_cols, outputCol="raw_features")
-
     # ---- Random Forest ----
     rf_scaler = MinMaxScaler(inputCol="raw_features", outputCol="features")
     rf = RandomForestClassifier(featuresCol="features", labelCol="label", seed=SEED)
     rf_pipeline = Pipeline(stages=[assembler, rf_scaler, rf])
-    rf_grid = (
-        ParamGridBuilder()
-        .addGrid(rf.numTrees, [50, 100, 200])
-        .addGrid(rf.maxDepth, [5, 10, 15])
-        .addGrid(rf.maxBins, [32, 64, 128])
-        .build()
-    )
-
+    rf_grid = ParamGridBuilder()
+    if smoke:
+        rf_grid = rf_grid.addGrid(rf.numTrees, [20, 50]).addGrid(rf.maxDepth, [5])
+    else:
+        rf_grid = (rf_grid.addGrid(rf.numTrees, [50, 100, 200])
+                          .addGrid(rf.maxDepth, [5, 10, 15])
+                          .addGrid(rf.maxBins, [32, 64, 128]))
+    rf_grid = rf_grid.build()
     # ---- Linear SVC ----
     svc_scaler = StandardScaler(inputCol="raw_features", outputCol="features",
                                 withMean=True, withStd=True)
     svc = LinearSVC(featuresCol="features", labelCol="label")
     svc_pipeline = Pipeline(stages=[assembler, svc_scaler, svc])
-    svc_grid = (
-        ParamGridBuilder()
-        .addGrid(svc.regParam, [0.001, 0.01, 0.1])
-        .addGrid(svc.maxIter, [50, 100, 200])
-        .addGrid(svc.tol, [1e-6, 1e-4, 1e-2])
-        .build()
-    )
-
+    svc_grid = ParamGridBuilder()
+    if smoke:
+        svc_grid = svc_grid.addGrid(svc.regParam, [0.01, 0.1]).addGrid(svc.maxIter, [20])
+    else:
+        svc_grid = (svc_grid.addGrid(svc.regParam, [0.001, 0.01, 0.1])
+                            .addGrid(svc.maxIter, [50, 100, 200])
+                            .addGrid(svc.tol, [1e-6, 1e-4, 1e-2]))
+    svc_grid = svc_grid.build()
     # ---- Naive Bayes ----
     # Multinomial / Complement need non-negative features; MinMaxScaler ensures that.
     nb_scaler = MinMaxScaler(inputCol="raw_features", outputCol="features")
     nb = NaiveBayes(featuresCol="features", labelCol="label")
     nb_pipeline = Pipeline(stages=[assembler, nb_scaler, nb])
-    nb_grid = (
-        ParamGridBuilder()
-        .addGrid(nb.smoothing, [0.5, 1.0, 2.0])
-        .addGrid(nb.modelType, ["multinomial", "complement", "gaussian"])
-        .addGrid(nb_scaler.max, [1.0, 5.0, 10.0])
-        .build()
-    )
-
+    nb_grid = ParamGridBuilder()
+    if smoke:
+        nb_grid = nb_grid.addGrid(nb.smoothing, [1.0]).addGrid(nb.modelType, ["multinomial", "complement"])
+    else:
+        nb_grid = (nb_grid.addGrid(nb.smoothing, [0.5, 1.0, 2.0])
+                          .addGrid(nb.modelType, ["multinomial", "complement", "gaussian"])
+                          .addGrid(nb_scaler.max, [1.0, 5.0, 10.0]))
+    nb_grid = nb_grid.build()
     return [
         ("rf",  rf_pipeline,  rf_grid),
         ("svm", svc_pipeline, svc_grid),
@@ -202,14 +200,17 @@ def write_csv(rows, fieldnames, path):
 
 def main():
     args = parse_args()
-
+    if args.smoke:
+        if args.only is None:
+            args.only = "svm"
+        if args.cv_folds == 4:
+            args.cv_folds = 2
     spark = (
         SparkSession.builder
         .appName("Stage3-EarlyDetection")
         .enableHiveSupport()
         .getOrCreate()
     )
-
     # STAGE3_SANITY_GUARD_V1
     spark.sparkContext.setLogLevel("WARN")
     spark.sql(f"USE {HIVE_DB}")
@@ -222,15 +223,16 @@ def main():
               "Fix Stage 2 and rerun — Stage 3 aborted.", file=sys.stderr)
         spark.stop(); sys.exit(2)
     spark.sparkContext.setLogLevel("WARN")
-
     print("=" * 60)
     print("Stage 3 — early detection ML on YARN")
+    if args.smoke:
+        print("  *** SMOKE MODE *** (mini grid, 2 folds, single model)")
+    print(f"  Models trained:     {args.only or 'rf, svm, nb'}")
     print(f"  Success thresholds: stars >= {args.success_stars_min}, "
           f"growth >= {args.success_growth_min}x")
     print(f"  Min pre-T events:   {args.min_pre_events}")
     print(f"  CV folds:           {args.cv_folds}")
     print("=" * 60)
-
     df, feature_cols = build_dataset(spark, args)
     df = df.cache()
     total = df.count()
@@ -241,15 +243,14 @@ def main():
         sys.exit(1)
     print(f"  Repos in dataset:   {total:,}")
     print(f"  Positive class:     {pos:,} ({100.0 * pos / total:.4f}%)")
-
     train, test = stratified_split(df, args.train_frac)
     train_n, test_n = train.count(), test.count()
     print(f"  Train size:         {train_n:,}")
     print(f"  Test size:          {test_n:,}")
-
-    pipelines = build_pipelines(feature_cols)
+    pipelines = build_pipelines(feature_cols, smoke=args.smoke)
+    if args.only:
+        pipelines = [p for p in pipelines if p[0] == args.only]
     evaluator = BinaryClassificationEvaluator(metricName="areaUnderPR", labelCol="label")
-
     metrics = []
     best_models = {}
     for name, pipeline, grid in pipelines:
@@ -265,19 +266,15 @@ def main():
         cv_model = cv.fit(train)
         best = cv_model.bestModel
         best_models[name] = best
-
         m = evaluate(best, test, name)
         print(f"  test AUROC: {m['auroc']}  |  AUPR: {m['aupr']}")
         metrics.append(m)
-
         model_path = f"{args.models_dir}/{name}"
         best.write().overwrite().save(model_path)
         print(f"  saved best model to (HDFS): {model_path}")
-
     metrics_path = os.path.join(args.output_dir, "stage3_metrics.csv")
     write_csv(metrics, ["model", "auroc", "aupr"], metrics_path)
     print(f"\nMetrics saved to {metrics_path}")
-
     # ---- Sample prediction on one specific instance ----
     sample_row = test.orderBy(F.col("label").desc()).limit(1).collect()
     if not sample_row:
@@ -287,14 +284,12 @@ def main():
         print("\n[Sample prediction]")
         print(f"  repo_id={s['repo_id']}  true_label={int(s['label'])}")
         sample_df = test.filter(F.col("repo_id") == s["repo_id"]).limit(1)
-
         sample_rows = [{"feature": col, "value": s[col]} for col in feature_cols]
         write_csv(
             sample_rows,
             ["feature", "value"],
             os.path.join(args.output_dir, "stage3_sample_features.csv"),
         )
-
         prediction_rows = [{
             "repo_id": s["repo_id"],
             "true_label": int(s["label"]),
@@ -304,13 +299,11 @@ def main():
             pred = model.transform(sample_df).select("prediction").first()["prediction"]
             print(f"  {name.upper()}: prediction = {pred}")
             prediction_rows[0][f"{name}_prediction"] = pred
-
         write_csv(
             prediction_rows,
             ["repo_id", "true_label", "rf_prediction", "svm_prediction", "nb_prediction"],
             os.path.join(args.output_dir, "stage3_sample_prediction.csv"),
         )
-
     spark.stop()
     print("\nStage 3 done.")
 
