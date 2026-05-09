@@ -55,11 +55,21 @@ beeline -u "$HIVE_URL" \
     2>&1 | tee output/hive_results.txt
 
 # ---- 4. Run EDA queries q1..q6 and export each result as CSV ----
+# stdout (CSV result) -> output/$q.csv
+# stderr (Hive driver log, query plan, errors) -> appended to
+# output/hive_results.txt so EDA execution evidence is preserved.
 echo ""
 echo "[4/4] Running EDA queries..."
 for q in q1 q2 q3 q4 q5 q6; do
     echo ""
     echo "  --- $q.hql ---"
+    {
+        echo ""
+        echo "============================================"
+        echo "EDA query: $q.hql"
+        echo "============================================"
+    } >> output/hive_results.txt
+
     beeline -u "$HIVE_URL" \
         -n "$USER" \
         -p "$password" \
@@ -68,7 +78,8 @@ for q in q1 q2 q3 q4 q5 q6; do
         --showHeader=true \
         --hiveconf hive.resultset.use.unique.column.names=false \
         -f "sql/$q.hql" \
-        > "output/$q.csv"
+        > "output/$q.csv" \
+        2>> output/hive_results.txt
 
     rows=$(($(wc -l < "output/$q.csv") - 1))
     echo "  $q done: output/$q.csv ($rows rows)"

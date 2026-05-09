@@ -1,23 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 
+echo "============================================"
 echo "Stage 3: Spark ML on YARN"
+echo "============================================"
 
 if [ -d "venv" ]; then
     source venv/bin/activate
 fi
 
-mkdir -p output models
+mkdir -p data output models
 
 SUCCESS_STARS_MIN="${SUCCESS_STARS_MIN:-500}"
 SUCCESS_GROWTH_MIN="${SUCCESS_GROWTH_MIN:-3.0}"
 MIN_PRE_EVENTS="${MIN_PRE_EVENTS:-5}"
 CV_FOLDS="${CV_FOLDS:-4}"
 HDFS_MODELS_DIR="${HDFS_MODELS_DIR:-project/models}"
+HDFS_DATA_DIR="${HDFS_DATA_DIR:-project/data}"
+HDFS_OUTPUT_DIR="${HDFS_OUTPUT_DIR:-project/output}"
 
-# ---- Run Spark job on YARN ----
+# ---- 1. Run Spark job on YARN ----
 echo ""
-echo "[1/2] Submitting Spark job..."
+echo "[1/3] Submitting Spark job..."
 spark-submit \
     --master yarn \
     --deploy-mode client \
@@ -36,12 +40,14 @@ spark-submit \
         --cv-folds "$CV_FOLDS" \
         --output-dir output \
         --models-dir "$HDFS_MODELS_DIR" \
+        --data-dir "$HDFS_DATA_DIR" \
+        --predictions-dir "$HDFS_OUTPUT_DIR" \
         "$@" \
     2>&1 | tee output/stage3.log
 
-# ---- Mirror trained models from HDFS to local models/ ----
+# ---- 2. Mirror trained models from HDFS to local models/ ----
 echo ""
-echo "[2/2] Copying trained models from HDFS to local models/..."
+echo "[2/3] Copying trained models from HDFS to local models/..."
 for name in rf svm nb; do
     if hdfs dfs -test -d "$HDFS_MODELS_DIR/$name" 2>/dev/null; then
         rm -rf "models/$name"
@@ -52,12 +58,40 @@ for name in rf svm nb; do
     fi
 done
 
+# ---- 3. Mirror data splits + per-model predictions + evaluation ----
+# Spark `coalesce(1).write` produces a *directory* containing one
+# part-* file. `getmerge` flattens the directory into a single local
+# file, which is what the Stage 3 checklist expects.
+echo ""
+echo "[3/3] Copying data splits, predictions, and evaluation from HDFS..."
+
+merge_from_hdfs() {
+    local src="$1"
+    local dst="$2"
+    if hdfs dfs -test -d "$src" 2>/dev/null; then
+        rm -f "$dst"
+        hdfs dfs -getmerge "$src" "$dst"
+        echo "  $dst <- $src"
+    else
+        echo "  WARN: $src not found on HDFS"
+    fi
+}
+
+merge_from_hdfs "$HDFS_DATA_DIR/train"             data/train.json
+merge_from_hdfs "$HDFS_DATA_DIR/test"              data/test.json
+merge_from_hdfs "$HDFS_OUTPUT_DIR/rf_predictions.csv"  output/rf_predictions.csv
+merge_from_hdfs "$HDFS_OUTPUT_DIR/svm_predictions.csv" output/svm_predictions.csv
+merge_from_hdfs "$HDFS_OUTPUT_DIR/nb_predictions.csv"  output/nb_predictions.csv
+merge_from_hdfs "$HDFS_OUTPUT_DIR/evaluation.csv"      output/evaluation.csv
+
 echo ""
 echo "============================================"
 echo "Stage 3 complete!"
-echo "  Metrics:           output/stage3_metrics.csv"
+echo "  Train/test splits: data/train.json, data/test.json"
+echo "  Trained models:    models/{rf,svm,nb}/"
+echo "  Predictions:       output/{rf,svm,nb}_predictions.csv"
+echo "  Evaluation:        output/evaluation.csv"
 echo "  Sample features:   output/stage3_sample_features.csv"
 echo "  Sample prediction: output/stage3_sample_prediction.csv"
-echo "  Trained models:    models/{rf,svm,nb}/"
 echo "  Driver log:        output/stage3.log"
 echo "============================================"

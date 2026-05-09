@@ -3,7 +3,7 @@ Stage 3 — Spark ML on YARN.
 
 Trains three binary classifiers (Random Forest, Linear SVC, Naive Bayes)
 to predict whether a GitHub repository will become "high-potential" in
-the 6 months after the temporal split point T = 1.7.359.
+the 6 months after the temporal split point T = 2023-12-31.
 
 Pseudo-label (per the team registration):
     success = 1
@@ -13,8 +13,8 @@ Pseudo-label (per the team registration):
     success = 0  otherwise.
 
 Where:
-    pre_watches  = WatchEvent count in [1.7.360, 1.7.361]
-    post_watches = WatchEvent count in [1.7.362, 1.7.363]
+    pre_watches  = WatchEvent count in [2023-01-01, 2023-12-31]
+    post_watches = WatchEvent count in [2024-01-01, 2024-06-30]
 
 Reference: Borges & Valente, "What's in a GitHub Star?" (MSR 2018).
 
@@ -58,6 +58,10 @@ def parse_args():
                         help="Train only one model (default: all three).")
     parser.add_argument("--smoke", action="store_true",
                         help="Mini grid + 2 folds + only=svm. Full dataset.")
+    parser.add_argument("--data-dir", default="project/data",
+                        help="HDFS directory for train/test JSON splits.")
+    parser.add_argument("--predictions-dir", default="project/output",
+                        help="HDFS directory for per-model predictions and evaluation.")
     return parser.parse_args()
 
 
@@ -244,9 +248,19 @@ def main():
     print(f"  Repos in dataset:   {total:,}")
     print(f"  Positive class:     {pos:,} ({100.0 * pos / total:.4f}%)")
     train, test = stratified_split(df, args.train_frac)
+    train = train.cache()
+    test = test.cache()
     train_n, test_n = train.count(), test.count()
     print(f"  Train size:         {train_n:,}")
     print(f"  Test size:          {test_n:,}")
+    # Persist the splits to HDFS so the grader can inspect them and so
+    # downstream stages (Stage 4 dashboard, future re-training) read the
+    # exact same split. The Stage 3 checklist requires JSON at
+    # project/data/{train,test}; stage3.sh mirrors them to data/*.json.
+    train.coalesce(1).write.mode("overwrite").json(f"{args.data_dir}/train")
+    test.coalesce(1).write.mode("overwrite").json(f"{args.data_dir}/test")
+    print(f"  Saved splits to HDFS: {args.data_dir}/{{train,test}}")
+
     pipelines = build_pipelines(feature_cols, smoke=args.smoke)
     if args.only:
         pipelines = [p for p in pipelines if p[0] == args.only]
@@ -272,9 +286,33 @@ def main():
         model_path = f"{args.models_dir}/{name}"
         best.write().overwrite().save(model_path)
         print(f"  saved best model to (HDFS): {model_path}")
-    metrics_path = os.path.join(args.output_dir, "stage3_metrics.csv")
-    write_csv(metrics, ["model", "auroc", "aupr"], metrics_path)
-    print(f"\nMetrics saved to {metrics_path}")
+
+        # Save full test-set predictions per model (label + prediction).
+        predictions_path = f"{args.predictions_dir}/{name}_predictions.csv"
+        (best.transform(test)
+             .select("label", "prediction")
+             .coalesce(1)
+             .write.mode("overwrite")
+             .option("header", "true")
+             .csv(predictions_path))
+        print(f"  saved test predictions to (HDFS): {predictions_path}")
+
+    # Comparison dataframe — required artifact (project/output/evaluation.csv).
+    eval_rows = [(m["model"], float(m["auroc"]), float(m["aupr"])) for m in metrics]
+    eval_df = spark.createDataFrame(eval_rows, ["model", "AUROC", "AUPR"])
+    eval_df.show(truncate=False)
+    eval_hdfs = f"{args.predictions_dir}/evaluation.csv"
+    (eval_df.coalesce(1)
+            .write.mode("overwrite")
+            .option("header", "true")
+            .csv(eval_hdfs))
+    print(f"Evaluation saved to (HDFS): {eval_hdfs}")
+
+    # And a local copy for direct inspection in the repo.
+    eval_local = os.path.join(args.output_dir, "evaluation.csv")
+    write_csv(metrics, ["model", "auroc", "aupr"], eval_local)
+    print(f"Evaluation saved locally: {eval_local}")
+
     # ---- Sample prediction on one specific instance ----
     sample_row = test.orderBy(F.col("label").desc()).limit(1).collect()
     if not sample_row:
