@@ -1,8 +1,11 @@
--- q4 - Sensitivity of the success label to threshold choice
+-- q4 — Sensitivity of the success label to threshold choice
+
 USE team28_projectdb;
+
 SET hive.execution.engine=tez;
 
 DROP TABLE IF EXISTS q4_results;
+
 CREATE EXTERNAL TABLE q4_results (
                                      stars_min      INT,
                                      growth_min     DOUBLE,
@@ -13,24 +16,6 @@ CREATE EXTERNAL TABLE q4_results (
     ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
     STORED AS TEXTFILE
     LOCATION 'project/hive/warehouse/q4_results';
-
--- Materialise thresholds as a tiny temp table with an explicit schema.
--- Inline UNION ALL has been observed to lose typing in Hive 3 even with
--- CAST on the first row, collapsing 100/250/500/1000 into 0/1 (BOOLEAN).
-DROP TABLE IF EXISTS q4_thresholds_tmp;
-CREATE TABLE q4_thresholds_tmp (
-                                   stars_min   INT,
-                                   growth_min  DOUBLE
-);
-
-INSERT INTO q4_thresholds_tmp VALUES
-                                  (100,  2.0),
-                                  (100,  3.0),
-                                  (250,  2.0),
-                                  (250,  3.0),
-                                  (500,  2.0),
-                                  (500,  3.0),
-                                  (1000, 3.0);
 
 INSERT OVERWRITE TABLE q4_results
 SELECT
@@ -55,10 +40,20 @@ FROM (
          FROM events_part
          GROUP BY repo_id
      ) per
-         CROSS JOIN q4_thresholds_tmp th
+         -- Explicit CAST on the first row anchors the column types of the
+-- inline UNION ALL table; without them Hive 3 has been observed to
+-- coerce stars_min into BOOLEAN/TINYINT, which collapses 100/250/500/1000
+-- into 0/1 in the join. Same idea for growth_min (DOUBLE).
+         CROSS JOIN (
+    SELECT CAST(100  AS INT) AS stars_min, CAST(2.0 AS DOUBLE) AS growth_min
+    UNION ALL   SELECT CAST(100  AS INT),              CAST(3.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(250  AS INT),              CAST(2.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(250  AS INT),              CAST(3.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(500  AS INT),              CAST(2.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(500  AS INT),              CAST(3.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(1000 AS INT),              CAST(3.0 AS DOUBLE)
+) th
 GROUP BY th.stars_min, th.growth_min
 ORDER BY th.stars_min, th.growth_min;
-
-DROP TABLE q4_thresholds_tmp;
 
 SELECT * FROM q4_results;
