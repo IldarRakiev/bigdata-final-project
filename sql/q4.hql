@@ -1,6 +1,3 @@
-cd ~/bigdata-final-project
-
-cat > sql/q4.hql <<'SQL'
 USE team28_projectdb;
 SET hive.execution.engine=tez;
 
@@ -71,4 +68,3 @@ FROM (SELECT repo_id,
       FROM events_part GROUP BY repo_id) p;
 
 SELECT * FROM q4_results ORDER BY stars_min, growth_min;
-SQL
