@@ -17,6 +17,25 @@ ROW FORMAT DELIMITED FIELDS TERMINATED BY ','
 STORED AS TEXTFILE
 LOCATION 'project/hive/warehouse/q4_results';
 
+-- Materialise the threshold pairs as a real managed table.
+-- Earlier attempts used `SELECT 100 AS stars_min UNION ALL ...` inline,
+-- but Hive 3 silently coerces the column type from the first row's
+-- literal and collapses 100 / 250 / 500 / 1000 into 0/1 in the join.
+-- A real DDL with explicit INT and DOUBLE columns is bulletproof.
+DROP TABLE IF EXISTS q4_thresholds;
+CREATE TABLE q4_thresholds (
+    stars_min   INT,
+    growth_min  DOUBLE
+);
+INSERT INTO q4_thresholds VALUES
+    (100,  2.0),
+    (100,  3.0),
+    (250,  2.0),
+    (250,  3.0),
+    (500,  2.0),
+    (500,  3.0),
+    (1000, 3.0);
+
 INSERT OVERWRITE TABLE q4_results
 SELECT
     th.stars_min,
@@ -40,20 +59,10 @@ FROM (
     FROM events_part
     GROUP BY repo_id
 ) per
--- Explicit CAST on the first row anchors the column types of the
--- inline UNION ALL table; without them Hive 3 has been observed to
--- coerce stars_min into BOOLEAN/TINYINT, which collapses 100/250/500/1000
--- into 0/1 in the join. Same idea for growth_min (DOUBLE).
-CROSS JOIN (
-                SELECT CAST(100  AS INT) AS stars_min, CAST(2.0 AS DOUBLE) AS growth_min
-    UNION ALL   SELECT CAST(100  AS INT),              CAST(3.0 AS DOUBLE)
-    UNION ALL   SELECT CAST(250  AS INT),              CAST(2.0 AS DOUBLE)
-    UNION ALL   SELECT CAST(250  AS INT),              CAST(3.0 AS DOUBLE)
-    UNION ALL   SELECT CAST(500  AS INT),              CAST(2.0 AS DOUBLE)
-    UNION ALL   SELECT CAST(500  AS INT),              CAST(3.0 AS DOUBLE)
-    UNION ALL   SELECT CAST(1000 AS INT),              CAST(3.0 AS DOUBLE)
-) th
+CROSS JOIN q4_thresholds th
 GROUP BY th.stars_min, th.growth_min
 ORDER BY th.stars_min, th.growth_min;
+
+DROP TABLE q4_thresholds;
 
 SELECT * FROM q4_results;
