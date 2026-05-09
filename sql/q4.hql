@@ -40,14 +40,18 @@ FROM (
     FROM events_part
     GROUP BY repo_id
 ) per
+-- Explicit CAST on the first row anchors the column types of the
+-- inline UNION ALL table; without them Hive 3 has been observed to
+-- coerce stars_min into BOOLEAN/TINYINT, which collapses 100/250/500/1000
+-- into 0/1 in the join. Same idea for growth_min (DOUBLE).
 CROSS JOIN (
-                SELECT 100 AS stars_min, 2.0 AS growth_min
-    UNION ALL   SELECT 100,             3.0
-    UNION ALL   SELECT 250,             2.0
-    UNION ALL   SELECT 250,             3.0
-    UNION ALL   SELECT 500,             2.0
-    UNION ALL   SELECT 500,             3.0
-    UNION ALL   SELECT 1000,            3.0
+                SELECT CAST(100  AS INT) AS stars_min, CAST(2.0 AS DOUBLE) AS growth_min
+    UNION ALL   SELECT CAST(100  AS INT),              CAST(3.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(250  AS INT),              CAST(2.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(250  AS INT),              CAST(3.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(500  AS INT),              CAST(2.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(500  AS INT),              CAST(3.0 AS DOUBLE)
+    UNION ALL   SELECT CAST(1000 AS INT),              CAST(3.0 AS DOUBLE)
 ) th
 GROUP BY th.stars_min, th.growth_min
 ORDER BY th.stars_min, th.growth_min;
