@@ -156,10 +156,11 @@ def build_pipelines(feature_cols, smoke=False):
     svc_pipeline = Pipeline(stages=[assembler, svc_scaler, svc])
     svc_grid = ParamGridBuilder()
     if smoke:
-        svc_grid = svc_grid.addGrid(svc.regParam, [0.01]).addGrid(svc.maxIter, [20])
+        svc_grid = (svc_grid.addGrid(svc.regParam, [0.01])
+                            .addGrid(svc.aggregationDepth, [2]))
     else:
         svc_grid = (svc_grid.addGrid(svc.regParam, [0.01, 0.1])
-                            .addGrid(svc.maxIter, [50, 100]))
+                            .addGrid(svc.aggregationDepth, [2, 4]))
     svc_grid = svc_grid.build()
 
     # ---- Naive Bayes ----
