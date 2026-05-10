@@ -175,6 +175,7 @@ def build_events_clean(events_df, data_dir):
 
 
 def main():
+    """Run the full CSV preprocessing pipeline."""
     args = parse_args()
     data_dir = args.data_dir
 
