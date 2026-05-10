@@ -1,0 +1,6 @@
+activity_bucket,repo_count,success_count,success_rate_pct
+Q1_<10_events,10019445,476,0.00475
+Q2_10-29_events,700495,576,0.08223
+Q3_30-99_events,240586,468,0.19453
+Q4_100-999_events,83860,376,0.44837
+Q5_>=1000_events,7274,28,0.38493

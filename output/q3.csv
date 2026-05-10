@@ -1,0 +1,10 @@
+growth_bucket,repo_count,pct_of_total
+00_no_stars,9886287,89.4552
+01_new_in_post,294581,2.6655
+02_decay_to_zero,713257,6.4538
+03_decline,95718,0.8661
+04_growth_lt_2x,46391,0.4198
+05_growth_2x_3x,9516,0.0861
+06_growth_3x_5x,4178,0.0378
+07_growth_gt_5x,1732,0.0157
+

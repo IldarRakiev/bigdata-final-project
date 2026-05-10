@@ -1,0 +1,31 @@
+{
+  "type" : "record",
+  "name" : "repositories",
+  "doc" : "Sqoop import of repositories",
+  "fields" : [ {
+    "name" : "repo_id",
+    "type" : [ "null", "long" ],
+    "default" : null,
+    "columnName" : "repo_id",
+    "sqlType" : "-5"
+  }, {
+    "name" : "repo_name",
+    "type" : [ "null", "string" ],
+    "default" : null,
+    "columnName" : "repo_name",
+    "sqlType" : "12"
+  }, {
+    "name" : "first_seen_at",
+    "type" : [ "null", "long" ],
+    "default" : null,
+    "columnName" : "first_seen_at",
+    "sqlType" : "93"
+  }, {
+    "name" : "language",
+    "type" : [ "null", "string" ],
+    "default" : null,
+    "columnName" : "language",
+    "sqlType" : "12"
+  } ],
+  "tableName" : "repositories"
+}

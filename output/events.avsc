@@ -1,0 +1,37 @@
+{
+  "type" : "record",
+  "name" : "events",
+  "doc" : "Sqoop import of events",
+  "fields" : [ {
+    "name" : "event_type",
+    "type" : [ "null", "string" ],
+    "default" : null,
+    "columnName" : "event_type",
+    "sqlType" : "12"
+  }, {
+    "name" : "repo_id",
+    "type" : [ "null", "long" ],
+    "default" : null,
+    "columnName" : "repo_id",
+    "sqlType" : "-5"
+  }, {
+    "name" : "event_date",
+    "type" : [ "null", "long" ],
+    "default" : null,
+    "columnName" : "event_date",
+    "sqlType" : "91"
+  }, {
+    "name" : "event_count",
+    "type" : [ "null", "int" ],
+    "default" : null,
+    "columnName" : "event_count",
+    "sqlType" : "4"
+  }, {
+    "name" : "unique_actors",
+    "type" : [ "null", "int" ],
+    "default" : null,
+    "columnName" : "unique_actors",
+    "sqlType" : "4"
+  } ],
+  "tableName" : "events"
+}
