@@ -57,10 +57,10 @@ TBLPROPERTIES ('skip.header.line.count'='1');
 
 -- Smoke checks
 SHOW TABLES;
-SELECT 'stage3_metrics'  AS t, COUNT(*) AS rows FROM stage3_metrics
+SELECT 'stage3_metrics'  AS t, COUNT(*) AS row_count FROM stage3_metrics
 UNION ALL
-SELECT 'rf_predictions',     COUNT(*)          FROM rf_predictions
+SELECT 'rf_predictions',     COUNT(*)               FROM rf_predictions
 UNION ALL
-SELECT 'svm_predictions',    COUNT(*)          FROM svm_predictions
+SELECT 'svm_predictions',    COUNT(*)               FROM svm_predictions
 UNION ALL
-SELECT 'nb_predictions',     COUNT(*)          FROM nb_predictions;
+SELECT 'nb_predictions',     COUNT(*)               FROM nb_predictions;
