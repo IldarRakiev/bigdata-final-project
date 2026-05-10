@@ -206,13 +206,13 @@ def write_csv(rows, fieldnames, path):
         writer.writerows(rows)
 
 
-def main():
+def main(): # pylint: disable=too-many-locals,too-many-statements
+    """Train and evaluate ML models for GitHub repository success prediction."""
     args = parse_args()
     if args.smoke:
         if args.only is None:
             args.only = "svm"
-        if args.cv_folds > 2:
-            args.cv_folds = 2
+        args.cv_folds = min(args.cv_folds, 2)
 
     spark = (
         SparkSession.builder

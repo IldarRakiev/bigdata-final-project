@@ -10,9 +10,9 @@ Usage:
 
 import os
 import sys
+from pprint import pprint
 
 import psycopg2 as psql
-from pprint import pprint
 
 
 DB_HOST = "hadoop-04.uni.innopolis.ru"
@@ -33,7 +33,7 @@ def read_password():
     if not os.path.isfile(path):
         print(f"ERROR: Password file not found: {path}", file=sys.stderr)
         sys.exit(1)
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return f.read().rstrip()
 
 
@@ -50,7 +50,7 @@ def create_tables(conn):
     """Execute DDL statements to create tables."""
     print("[1/3] Creating tables...")
     cur = conn.cursor()
-    with open(os.path.join(SQL_DIR, "create_tables.sql")) as f:
+    with open(os.path.join(SQL_DIR, "create_tables.sql"), encoding="utf-8") as f:
         cur.execute(f.read())
     conn.commit()
     print("  Tables created.")
@@ -61,7 +61,7 @@ def import_data(conn):
     print("[2/3] Importing data...")
     cur = conn.cursor()
 
-    with open(os.path.join(SQL_DIR, "import_data.sql")) as f:
+    with open(os.path.join(SQL_DIR, "import_data.sql"), encoding="utf-8") as f:
         commands = f.readlines()
 
     for i, csv_file in enumerate(CSV_FILES):
@@ -71,7 +71,7 @@ def import_data(conn):
             sys.exit(1)
         size_mb = os.path.getsize(csv_path) / (1024 * 1024)
         print(f"  Loading {csv_file} ({size_mb:.0f} MB)...")
-        with open(csv_path, "r") as data_file:
+        with open(csv_path, "r", encoding="utf-8") as data_file:
             cur.copy_expert(commands[i], data_file)
         conn.commit()
         print(f"  {csv_file} loaded.")
@@ -84,7 +84,7 @@ def test_database(conn):
     print("[3/3] Verifying database...")
     cur = conn.cursor()
 
-    with open(os.path.join(SQL_DIR, "test_database.sql")) as f:
+    with open(os.path.join(SQL_DIR, "test_database.sql"), encoding="utf-8") as f:
         commands = f.readlines()
 
     for command in commands:
