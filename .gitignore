@@ -180,3 +180,5 @@ data/*.gz
 
 # Secrets (passwords, credentials)
 secrets/
+
+.DS_Store
